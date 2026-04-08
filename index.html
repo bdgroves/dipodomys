@@ -852,15 +852,11 @@ Chart.defaults.font.family = "'JetBrains Mono', monospace";
 Chart.defaults.font.size = 10;
 
 // ── GBIF FETCH ──
-const BOUNDS = { minLat: 35.0, maxLat: 38.0, minLng: -118.8, maxLng: -115.2 };
-
-function inBounds(lat, lng) {
-  return lat >= BOUNDS.minLat && lat <= BOUNDS.maxLat &&
-         lng >= BOUNDS.minLng && lng <= BOUNDS.maxLng;
-}
+// WKT polygon covering Death Valley / Mojave region (lon lat per WKT spec)
+const DV_WKT = encodeURIComponent('POLYGON((-118.8 35.0,-115.2 35.0,-115.2 38.0,-118.8 38.0,-118.8 35.0))');
 
 async function gbifFetch(taxonKey, offset) {
-  const url = `https://api.gbif.org/v1/occurrence/search?taxonKey=${taxonKey}&hasCoordinate=true&country=US&limit=300&offset=${offset}`;
+  const url = `https://api.gbif.org/v1/occurrence/search?taxonKey=${taxonKey}&geometry=${DV_WKT}&hasCoordinate=true&limit=300&offset=${offset}`;
   const res = await fetch(url);
   if (!res.ok) throw new Error('GBIF ' + res.status);
   return res.json();
@@ -868,15 +864,14 @@ async function gbifFetch(taxonKey, offset) {
 
 async function fetchSpecies(taxonKey, label) {
   const records = [];
-  for (let offset = 0; offset < 600; offset += 300) {
+  for (let offset = 0; offset < 900; offset += 300) {
     document.getElementById('loading-msg').textContent =
-      `Fetching ${label} records (${offset + 1}–${offset + 300})…`;
+      `Fetching ${label} records (${offset + 1}-${offset + 300})...`;
     const data = await gbifFetch(taxonKey, offset);
-    const filtered = (data.results || []).filter(r =>
-      r.decimalLatitude != null && r.decimalLongitude != null &&
-      inBounds(r.decimalLatitude, r.decimalLongitude)
+    const valid = (data.results || []).filter(r =>
+      r.decimalLatitude != null && r.decimalLongitude != null
     );
-    records.push(...filtered);
+    records.push(...valid);
     if (data.endOfRecords) break;
   }
   return records;
@@ -1020,26 +1015,36 @@ function buildCharts(dRecs, mRecs) {
 
 // ── PHOTO GALLERY ──
 async function fetchPhotos(taxonKey, speciesClass, limit = 6) {
-  const url = `https://api.gbif.org/v1/occurrence/search?taxonKey=${taxonKey}&mediaType=StillImage&hasCoordinate=true&country=US&limit=40`;
+  const url = `https://api.gbif.org/v1/occurrence/search?taxonKey=${taxonKey}&mediaType=StillImage&geometry=${DV_WKT}&hasCoordinate=true&limit=100`;
   try {
     const res = await fetch(url);
     const data = await res.json();
     const photos = [];
     for (const rec of (data.results || [])) {
       if (photos.length >= limit) break;
-      const img = (rec.media || []).find(m => m.type === 'StillImage' && m.identifier);
+      const mediaArr = rec.media || rec.extensions?.['http://rs.gbif.org/terms/1.0/Multimedia'] || [];
+      const img = mediaArr.find(m =>
+        m.identifier && (
+          m.type === 'StillImage' ||
+          m.format?.startsWith('image/') ||
+          /\.(jpg|jpeg|png|webp)/i.test(m.identifier)
+        )
+      );
       if (!img) continue;
+      // Skip tiny thumbnails
+      if (img.identifier.includes('square') || img.identifier.includes('thumb')) continue;
       photos.push({
         url: img.identifier,
         license: img.license || '',
         rights: img.rightsHolder || rec.recordedBy || '',
         year: rec.year || '',
-        locality: rec.verbatimLocality || rec.county || '',
+        locality: rec.stateProvince || rec.county || rec.verbatimLocality || '',
         speciesClass
       });
     }
     return photos;
   } catch (e) {
+    console.warn('Photo fetch error:', e);
     return [];
   }
 }
