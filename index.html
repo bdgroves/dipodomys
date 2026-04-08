@@ -853,7 +853,8 @@ Chart.defaults.font.size = 10;
 
 // ── GBIF FETCH ──
 // WKT polygon covering Death Valley / Mojave region (lon lat per WKT spec)
-const DV_WKT = encodeURIComponent('POLYGON((-118.8 35.0,-115.2 35.0,-115.2 38.0,-118.8 38.0,-118.8 35.0))');
+// Counter-clockwise winding (NW→SW→SE→NE) as required by GBIF
+const DV_WKT = encodeURIComponent('POLYGON((-118.8 38.0,-118.8 35.0,-115.2 35.0,-115.2 38.0,-118.8 38.0))');
 
 async function gbifFetch(taxonKey, offset) {
   const url = `https://api.gbif.org/v1/occurrence/search?taxonKey=${taxonKey}&geometry=${DV_WKT}&hasCoordinate=true&limit=300&offset=${offset}`;
@@ -1014,31 +1015,30 @@ function buildCharts(dRecs, mRecs) {
 }
 
 // ── PHOTO GALLERY ──
+// iNaturalist taxon IDs (more reliable for photos + bounding box support)
+const INAT_IDS = { 2438531: 44120, 2438529: 44118 };
+
 async function fetchPhotos(taxonKey, speciesClass, limit = 6) {
-  const url = `https://api.gbif.org/v1/occurrence/search?taxonKey=${taxonKey}&mediaType=StillImage&geometry=${DV_WKT}&hasCoordinate=true&limit=100`;
+  const inatId = INAT_IDS[taxonKey];
+  const url = `https://api.inaturalist.org/v1/observations?taxon_id=${inatId}`
+    + `&nelat=38&nelng=-115.2&swlat=35&swlng=-118.8`
+    + `&has[]=photos&quality_grade=research&per_page=50&order_by=votes`;
   try {
     const res = await fetch(url);
     const data = await res.json();
     const photos = [];
-    for (const rec of (data.results || [])) {
+    for (const obs of (data.results || [])) {
       if (photos.length >= limit) break;
-      const mediaArr = rec.media || rec.extensions?.['http://rs.gbif.org/terms/1.0/Multimedia'] || [];
-      const img = mediaArr.find(m =>
-        m.identifier && (
-          m.type === 'StillImage' ||
-          m.format?.startsWith('image/') ||
-          /\.(jpg|jpeg|png|webp)/i.test(m.identifier)
-        )
-      );
-      if (!img) continue;
-      // Skip tiny thumbnails
-      if (img.identifier.includes('square') || img.identifier.includes('thumb')) continue;
+      const photo = obs.photos?.[0];
+      if (!photo?.url) continue;
+      // Get medium size (replace square with medium)
+      const imgUrl = photo.url.replace('square', 'medium');
       photos.push({
-        url: img.identifier,
-        license: img.license || '',
-        rights: img.rightsHolder || rec.recordedBy || '',
-        year: rec.year || '',
-        locality: rec.stateProvince || rec.county || rec.verbatimLocality || '',
+        url: imgUrl,
+        license: photo.license_code || 'cc-by-nc',
+        rights: obs.user?.login || '',
+        year: obs.observed_on ? obs.observed_on.slice(0, 4) : '',
+        locality: obs.place_guess || '',
         speciesClass
       });
     }
