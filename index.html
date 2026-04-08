@@ -457,6 +457,119 @@
     .ft-credits a { color: var(--accent); text-decoration: none; }
     .ft-credits a:hover { color: var(--gold); }
 
+    /* ── PHOTO GALLERY ── */
+    .photo-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 6px;
+      margin-top: 0.5rem;
+    }
+
+    @media (max-width: 900px) { .photo-grid { grid-template-columns: repeat(2, 1fr); } }
+    @media (max-width: 500px) { .photo-grid { grid-template-columns: 1fr 1fr; } }
+
+    .photo-item {
+      position: relative;
+      aspect-ratio: 1;
+      overflow: hidden;
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      cursor: pointer;
+    }
+
+    .photo-item img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+      transition: transform 0.4s ease, filter 0.3s ease;
+      filter: brightness(0.88) saturate(0.85);
+    }
+
+    .photo-item:hover img {
+      transform: scale(1.06);
+      filter: brightness(1) saturate(1);
+    }
+
+    .photo-badge {
+      position: absolute;
+      top: 0; left: 0;
+      font-family: var(--ff-mono);
+      font-size: 0.6rem;
+      letter-spacing: 0.1em;
+      padding: 3px 7px;
+      text-transform: uppercase;
+    }
+
+    .photo-badge.des { background: var(--deserti); color: #0C0906; }
+    .photo-badge.mer { background: var(--merriami); color: #0C0906; }
+
+    .photo-credit {
+      position: absolute;
+      bottom: 0; left: 0; right: 0;
+      background: linear-gradient(transparent, rgba(0,0,0,0.85));
+      padding: 1.5rem 0.5rem 0.4rem;
+      font-family: var(--ff-mono);
+      font-size: 0.58rem;
+      color: rgba(234,226,210,0.7);
+      opacity: 0;
+      transition: opacity 0.3s;
+    }
+
+    .photo-item:hover .photo-credit { opacity: 1; }
+
+    .photo-loading {
+      font-family: var(--ff-mono);
+      font-size: 0.75rem;
+      color: var(--muted);
+      padding: 1rem 0;
+    }
+
+    /* ── LIGHTBOX ── */
+    #lightbox {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(7,5,3,0.95);
+      z-index: 9000;
+      align-items: center;
+      justify-content: center;
+      flex-direction: column;
+      padding: 2rem;
+    }
+
+    #lightbox.open { display: flex; }
+
+    #lightbox img {
+      max-width: 90vw;
+      max-height: 78vh;
+      object-fit: contain;
+      border: 1px solid var(--border);
+    }
+
+    #lightbox-caption {
+      font-family: var(--ff-mono);
+      font-size: 0.7rem;
+      color: var(--muted);
+      margin-top: 1rem;
+      text-align: center;
+      max-width: 600px;
+    }
+
+    #lightbox-close {
+      position: absolute;
+      top: 1.5rem; right: 2rem;
+      font-family: var(--ff-mono);
+      font-size: 0.7rem;
+      letter-spacing: 0.2em;
+      color: var(--muted);
+      cursor: pointer;
+      text-transform: uppercase;
+      background: none; border: none;
+    }
+
+    #lightbox-close:hover { color: var(--gold); }
+
     /* ── LEAFLET DARK OVERRIDES ── */
     .leaflet-popup-content-wrapper {
       background: #141009 !important;
@@ -554,6 +667,28 @@
     </div>
 
   </div>
+</div>
+
+<div class="rule"></div>
+
+<!-- ═══════════════ PHOTO GALLERY ═══════════════ -->
+<div class="data-zone">
+  <div class="data-zone-inner">
+    <div class="label">Field Observations · iNaturalist via GBIF</div>
+    <h2 class="sec-title">In the Wild</h2>
+    <div class="photo-loading" id="photo-loading">Loading field photos…</div>
+    <div class="photo-grid" id="photo-grid"></div>
+    <p style="font-family:var(--ff-mono);font-size:0.62rem;color:var(--muted);margin-top:0.75rem">
+      CC-licensed field observations sourced live from GBIF/iNaturalist. Hover for photographer credit. Click to enlarge.
+    </p>
+  </div>
+</div>
+
+<!-- Lightbox -->
+<div id="lightbox">
+  <button id="lightbox-close" onclick="document.getElementById('lightbox').classList.remove('open')">✕ close</button>
+  <img id="lightbox-img" src="" alt="">
+  <div id="lightbox-caption"></div>
 </div>
 
 <div class="rule"></div>
@@ -883,8 +1018,91 @@ function buildCharts(dRecs, mRecs) {
   });
 }
 
+// ── PHOTO GALLERY ──
+async function fetchPhotos(taxonKey, speciesClass, limit = 6) {
+  const url = `https://api.gbif.org/v1/occurrence/search?taxonKey=${taxonKey}&mediaType=StillImage&hasCoordinate=true&country=US&limit=40`;
+  try {
+    const res = await fetch(url);
+    const data = await res.json();
+    const photos = [];
+    for (const rec of (data.results || [])) {
+      if (photos.length >= limit) break;
+      const img = (rec.media || []).find(m => m.type === 'StillImage' && m.identifier);
+      if (!img) continue;
+      photos.push({
+        url: img.identifier,
+        license: img.license || '',
+        rights: img.rightsHolder || rec.recordedBy || '',
+        year: rec.year || '',
+        locality: rec.verbatimLocality || rec.county || '',
+        speciesClass
+      });
+    }
+    return photos;
+  } catch (e) {
+    return [];
+  }
+}
+
+function buildGallery(photos) {
+  const grid = document.getElementById('photo-grid');
+  document.getElementById('photo-loading').style.display = 'none';
+
+  if (!photos.length) {
+    grid.innerHTML = '<p style="font-family:var(--ff-mono);font-size:0.75rem;color:var(--muted)">No photos available.</p>';
+    return;
+  }
+
+  photos.forEach(p => {
+    const item = document.createElement('div');
+    item.className = 'photo-item';
+
+    const badgeClass = p.speciesClass === 'des' ? 'des' : 'mer';
+    const badgeText = p.speciesClass === 'des' ? 'D. deserti' : 'D. merriami';
+    const credit = [p.rights, p.year, p.locality].filter(Boolean).join(' · ');
+
+    item.innerHTML = `
+      <img src="${p.url}" alt="${badgeText}" loading="lazy"
+           onerror="this.closest('.photo-item').style.display='none'">
+      <div class="photo-badge ${badgeClass}">${badgeText}</div>
+      <div class="photo-credit">${credit || 'iNaturalist / GBIF'}</div>
+    `;
+
+    item.addEventListener('click', () => {
+      document.getElementById('lightbox-img').src = p.url;
+      document.getElementById('lightbox-caption').textContent =
+        `${badgeText} · ${credit || 'iNaturalist / GBIF'} · ${p.license ? p.license.replace('http://creativecommons.org/licenses/','CC ') : ''}`;
+      document.getElementById('lightbox').classList.add('open');
+    });
+
+    grid.appendChild(item);
+  });
+}
+
+async function loadPhotos() {
+  const [dPhotos, mPhotos] = await Promise.all([
+    fetchPhotos(2438531, 'des', 6),
+    fetchPhotos(2438529, 'mer', 6)
+  ]);
+  // Interleave species
+  const all = [];
+  const max = Math.max(dPhotos.length, mPhotos.length);
+  for (let i = 0; i < max; i++) {
+    if (dPhotos[i]) all.push(dPhotos[i]);
+    if (mPhotos[i]) all.push(mPhotos[i]);
+  }
+  buildGallery(all.slice(0, 12));
+}
+
+// Close lightbox on backdrop click
+document.getElementById('lightbox').addEventListener('click', function(e) {
+  if (e.target === this) this.classList.remove('open');
+});
+
 // ── MAIN ──
 async function main() {
+  loadPhotos();
+
   try {
     const [dRecs, mRecs] = await Promise.all([
       fetchSpecies(2438531, 'D. deserti'),
