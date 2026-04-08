@@ -609,7 +609,7 @@
 <section id="hero">
   <canvas id="starfield"></canvas>
   <div class="hero-inner">
-    <p class="eyebrow">Death Valley Field Study &nbsp;·&nbsp; GBIF Live Data &nbsp;·&nbsp; Mojave Desert</p>
+    <p class="eyebrow">Death Valley Field Study &nbsp;·&nbsp; iNaturalist Live Data &nbsp;·&nbsp; Mojave Desert</p>
     <h1 class="hero-title">DIPODOMYS</h1>
     <p class="hero-sub">Kangaroo Rats of the Mojave &amp; Great Basin</p>
     <p class="hero-tagline">A data portrait of the desert's most improbable mammal.</p>
@@ -796,7 +796,7 @@
     Taxon keys: <em>D. deserti</em> 2438531 &nbsp;·&nbsp; <em>D. merriami</em> 2438529<br>
     Built by <a href="https://brooksgroves.com" target="_blank">Brooks Groves</a> &nbsp;·&nbsp;
     Ecology toolkit: <a href="https://github.com/bdgroves/desert-ecostats" target="_blank">desert-ecostats</a><br>
-    Data fetched live from the GBIF API on page load.
+    Occurrence data and photos fetched live from iNaturalist API on page load.
   </div>
 </footer>
 
@@ -856,24 +856,38 @@ Chart.defaults.font.size = 10;
 // Counter-clockwise winding (NW→SW→SE→NE) as required by GBIF
 const DV_WKT = encodeURIComponent('POLYGON((-118.8 38.0,-118.8 35.0,-115.2 35.0,-115.2 38.0,-118.8 38.0))');
 
-async function gbifFetch(taxonKey, offset) {
-  const url = `https://api.gbif.org/v1/occurrence/search?taxonKey=${taxonKey}&geometry=${DV_WKT}&hasCoordinate=true&limit=300&offset=${offset}`;
-  const res = await fetch(url);
-  if (!res.ok) throw new Error('GBIF ' + res.status);
-  return res.json();
-}
-
 async function fetchSpecies(taxonKey, label) {
+  const inatId = INAT_IDS[taxonKey];
   const records = [];
-  for (let offset = 0; offset < 900; offset += 300) {
+  for (let page = 1; page <= 5; page++) {
     document.getElementById('loading-msg').textContent =
-      `Fetching ${label} records (${offset + 1}-${offset + 300})...`;
-    const data = await gbifFetch(taxonKey, offset);
-    const valid = (data.results || []).filter(r =>
-      r.decimalLatitude != null && r.decimalLongitude != null
-    );
-    records.push(...valid);
-    if (data.endOfRecords) break;
+      `Fetching ${label} records (page ${page})...`;
+    const url = `https://api.inaturalist.org/v1/observations?taxon_id=${inatId}`
+      + `&nelat=38&nelng=-115.2&swlat=35&swlng=-118.8`
+      + `&per_page=200&page=${page}&quality_grade=research`;
+    try {
+      const res = await fetch(url);
+      const data = await res.json();
+      const results = data.results || [];
+      results.forEach(r => {
+        if (!r.location) return;
+        const [lat, lng] = r.location.split(',').map(Number);
+        records.push({
+          decimalLatitude: lat,
+          decimalLongitude: lng,
+          year: r.observed_on ? parseInt(r.observed_on.slice(0,4)) : null,
+          month: r.observed_on ? parseInt(r.observed_on.slice(5,7)) : null,
+          elevation: null,
+          species: r.taxon?.name || label,
+          institutionCode: 'iNaturalist',
+          recordedBy: r.user?.login || ''
+        });
+      });
+      if (results.length < 200) break;
+    } catch(e) {
+      console.warn('iNat fetch error page', page, e);
+      break;
+    }
   }
   return records;
 }
@@ -893,10 +907,10 @@ function buildMap(dRecs, mRecs) {
         radius: 5, color, fillColor: color, fillOpacity: 0.78, weight: 0
       });
       m.bindPopup(
-        `<div class="popup-sci">${r.species || r.scientificName || '—'}</div>` +
-        (r.year ? `<span class="popup-muted">Year: ${r.year}${r.month ? ' / Mo. ' + r.month : ''}</span>` : '') +
-        (r.elevation != null ? `<span class="popup-muted">Elev: ${Math.round(r.elevation)} m</span>` : '') +
-        (r.institutionCode ? `<span class="popup-muted">Source: ${r.institutionCode}</span>` : '')
+        `<div class="popup-sci">${r.species || '—'}</div>` +
+        (r.year ? `<span class="popup-muted">Observed: ${r.year}${r.month ? '-' + String(r.month).padStart(2,'0') : ''}</span>` : '') +
+        (r.recordedBy ? `<span class="popup-muted">Observer: ${r.recordedBy}</span>` : '') +
+        `<span class="popup-muted">iNaturalist · research grade</span>`
       );
       cluster.addLayer(m);
     });
